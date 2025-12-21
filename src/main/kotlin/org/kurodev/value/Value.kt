@@ -36,6 +36,7 @@ class VariableValue(val variable: Char) : Value() {
         throw IllegalArgumentException("'$variable' was not defined")
     }
 
+
     override fun isConstant(): Boolean = false
 
     override fun differentiate(d: Char): Value = if (d == variable) ONE else ZERO;
@@ -54,6 +55,10 @@ class VariableValue(val variable: Char) : Value() {
         var result = super.hashCode()
         result = 31 * result + variable.hashCode()
         return result
+    }
+
+    override fun toString(): String {
+        return "$variable"
     }
 
 }
@@ -232,7 +237,13 @@ class MinusValue(val a: Value, val b: Value) : Value() {
 
 class MultiplyValue(val a: Value, val b: Value) : Value() {
     override fun compute(vars: Map<Char, Value>) = a.compute(vars) * b.compute(vars)
-    override fun toString() = "$a * $b"
+    override fun toString() = when (a) {
+        is VariableValue if b is VariableValue -> "$a$b"
+        is VariableValue -> "$b$a"
+        !is VariableValue if b is VariableValue -> "$a$b"
+        else -> "$a * $b"
+    }
+
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
     override fun simplify(): Value {
         val tempA = a.simplify()

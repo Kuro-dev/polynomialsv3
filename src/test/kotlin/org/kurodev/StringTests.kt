@@ -1,6 +1,5 @@
 package org.kurodev
 
-import org.kurodev.value.Value
 import org.kurodev.value.toValue
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,9 +14,9 @@ class StringTests {
 
     @Test
     fun testStringRepresentation2() {
-        assertEquals("x", Value().toString())
-        assertEquals("2x", Value(2).toString())
-        assertEquals("2.75x", Value(2.75).toString())
+        assertEquals("x", 'x'.toValue().toString())
+        assertEquals("2x", 'x'.toValue().multiply(2).toString())
+        assertEquals("2.75x", 'x'.toValue().multiply(2.75).toString())
     }
 }
 
