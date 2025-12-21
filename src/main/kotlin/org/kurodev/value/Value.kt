@@ -5,6 +5,13 @@ import kotlin.math.*
 
 private val ZERO: Value = 0.toValue()
 private val ONE: Value = 1.toValue()
+private val TWO: Value = 2.toValue()
+private val THREE: Value = 3.toValue()
+
+private val NEG_ONE: Value = (-1).toValue()
+private val E: Value = Math.E.toValue()
+private val PI: Value = Math.PI.toValue()
+private val LN_TWO: Value = LnValue(2.toValue()).simplify()
 
 fun Double.toValue(): Value {
     return ConstantValue(this)
@@ -29,7 +36,8 @@ class VariableValue(val variable: Char) : Value() {
 
     override fun isConstant(): Boolean = false
 
-    override fun differentiate(): Value = ONE
+    override fun differentiate(d: Char): Value = if (d == variable) ONE else ZERO;
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -54,7 +62,7 @@ class ConstantValue(val num: Double) : Value() {
     override fun compute(vars: Map<Char, Value>) = num
     override fun toString(): String = if (num % 1.0 == 0.0) num.toInt().toString() else num.toString()
     override fun isConstant(): Boolean = true
-    override fun differentiate(): Value = ZERO;
+    override fun differentiate(d: Char): Value = ZERO;
 }
 
 
@@ -73,7 +81,7 @@ abstract class Value() {
 
     abstract fun isConstant(): Boolean;
 
-    abstract fun differentiate(): Value;
+    abstract fun differentiate(d: Char): Value;
 
     /**
      * Simplifies all constant values by precomputing them
@@ -85,6 +93,20 @@ abstract class Value() {
         return this
     }
 
+    /**
+     * Multiplies the current value with -1
+     */
+    operator fun unaryMinus(): Value = MultiplyValue(NEG_ONE, this).simplify()
+
+    fun isZero(): Boolean = this is ConstantValue && this.num == 0.0
+    fun isOne(): Boolean = this is ConstantValue && this.num == 1.0
+    fun isNegativeOne(): Boolean = this is ConstantValue && this.num == -1.0
+
+    fun negate(): Value = when {
+        this == ZERO -> ZERO
+        this is MultiplyValue && this.a == NEG_ONE -> this.b
+        else -> MultiplyValue(NEG_ONE, this).simplify()
+    }
 
     fun plus(other: Value): Value = PlusValue(this, other)
     fun plus(other: Double) = plus(other.toValue())
@@ -146,21 +168,40 @@ class PlusValue(val a: Value, val b: Value) : Value() {
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
 
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
-        }
         val tempA = a.simplify()
         val tempB = b.simplify()
-        if (tempA.isConstant() && tempB.isConstant()) {
-            return compute(0).toValue()
+
+        when {
+            tempA.isConstant() && tempB.isConstant() -> return compute(0).toValue()
+            tempA == ZERO -> return tempB
+            tempB == ZERO -> return tempA
+            tempB is MultiplyValue && tempB.a == NEG_ONE && tempB.b == tempA -> return ZERO
+            tempA is MultiplyValue && tempA.a == NEG_ONE && tempA.b == tempB -> return ZERO
+            tempA is MultiplyValue && tempB is MultiplyValue -> {
+                when {
+                    tempA.b == tempB.b -> return MultiplyValue(
+                        PlusValue(tempA.a, tempB.a).simplify(),
+                        tempA.b
+                    ).simplify()
+
+                    tempA.a == tempB.a -> return MultiplyValue(
+                        tempA.a,
+                        PlusValue(tempA.b, tempB.b).simplify()
+                    ).simplify()
+                }
+            }
+
+            tempA !is ConstantValue && tempB is ConstantValue -> {
+                return PlusValue(tempB, tempA)
+            }
+
+            else -> return PlusValue(tempA, tempB)
         }
-        if (tempA == ZERO) return tempB
-        if (tempB == ZERO) return tempA
-        return PlusValue(tempA, tempB)
+        return this;
     }
 
-    override fun differentiate(): Value {
-        return PlusValue(a.differentiate(), b.differentiate())
+    override fun differentiate(d: Char): Value {
+        return PlusValue(a.differentiate(d), b.differentiate(d))
     }
 }
 
@@ -169,22 +210,21 @@ class MinusValue(val a: Value, val b: Value) : Value() {
     override fun toString() = "$a - $b"
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
-        }
         val tempA = a.simplify()
         val tempB = b.simplify()
-        if (tempA.isConstant() && tempB.isConstant()) {
-            return compute(0).toValue()
+        return when {
+            tempA.isConstant() && tempB.isConstant() -> compute(0).toValue()
+            tempA == tempB -> ZERO // x - x = 0
+            tempB == ZERO -> tempA // x - 0 = x
+            tempA == ZERO -> MultiplyValue(NEG_ONE, tempB).simplify() // 0 - x = -x
+            tempB is ConstantValue && tempB.num < 0 -> PlusValue(tempA, (-tempB.num).toValue()).simplify()
+            tempB is MultiplyValue && tempB.a == NEG_ONE -> PlusValue(tempA, tempB.b).simplify() // a - (-b) = a + b
+            else -> MinusValue(tempA, tempB)
         }
-        if (tempA == tempB) {
-            return ZERO
-        }
-        return MinusValue(tempA, tempB)
     }
 
-    override fun differentiate(): Value {
-        return MinusValue(a.differentiate(), b.differentiate())
+    override fun differentiate(d: Char): Value {
+        return MinusValue(a.differentiate(d), b.differentiate(d))
     }
 }
 
@@ -193,24 +233,32 @@ class MultiplyValue(val a: Value, val b: Value) : Value() {
     override fun toString() = "$a * $b"
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
-        }
         val tempA = a.simplify()
         val tempB = b.simplify()
-
-        if (tempA.isConstant() && tempB.isConstant()) {
-            return compute(0).toValue()
+        when {
+            tempA.isConstant() && tempB.isConstant() -> return compute(0).toValue()
+            tempA == ZERO || tempB == ZERO -> return ZERO // 0 * x = 0
+            tempA == ONE -> return tempB // 1 * x = x
+            tempB == ONE -> return tempA
+            tempA == NEG_ONE -> return MultiplyValue(NEG_ONE, tempB).simplify() // (-1) * x = -x
+            tempB == NEG_ONE -> return MultiplyValue(NEG_ONE, tempA).simplify()
+            tempA == tempB -> return PowerValue(tempA, TWO).simplify() // x * x = x²
+            tempA is PowerValue && tempB is PowerValue && tempA.base == tempB.base ->    // x^a * x^b = x^(a+b)
+                return PowerValue(tempA.base, PlusValue(tempA.exponent, tempB.exponent).simplify()).simplify()
+            // Distribute multiplication over addition if one factor is constant
+            tempA is PlusValue && tempB is ConstantValue ->
+                return PlusValue(
+                    MultiplyValue(tempA.a, tempB).simplify(),
+                    MultiplyValue(tempA.b, tempB).simplify()
+                ).simplify()
+            // Commutative reordering: move constants to front
+            tempA !is ConstantValue && tempB is ConstantValue -> return MultiplyValue(tempB, tempA)
+            else -> return MultiplyValue(tempA, tempB)
         }
-
-        if (tempA == ZERO && tempB == ZERO) {
-            return ZERO
-        }
-        return MultiplyValue(tempA, tempB)
     }
 
-    override fun differentiate(): Value {
-        return PlusValue(MultiplyValue(a.differentiate(), b), MultiplyValue(a, b.differentiate()))
+    override fun differentiate(d: Char): Value {
+        return PlusValue(MultiplyValue(a.differentiate(d), b), MultiplyValue(a, b.differentiate(d))).simplify()
     }
 }
 
@@ -222,28 +270,55 @@ class DivideValue(val a: Value, val b: Value) : Value() {
     }
 
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
-        }
         val tempA = a.simplify()
         val tempB = b.simplify()
 
-        if (tempA.isConstant() && tempB.isConstant()) {
-            return compute(0).toValue()
+        when {
+            tempA.isConstant() && tempB.isConstant() -> return compute(0).toValue()
+            tempA == ZERO && tempB != ZERO -> return ZERO
+            tempB == ONE -> return tempA
+            tempA == tempB && tempA != ZERO -> return ONE
+            tempB == NEG_ONE -> return MultiplyValue(NEG_ONE, tempA).simplify()
+            tempA is MultiplyValue -> {
+                if (tempA.a == tempB) return tempA.b
+                if (tempA.b == tempB) return tempA.a
+            }
         }
 
-        if (tempA == tempB) {
-            return ONE
+        when {
+            tempB is PowerValue && tempB.base == tempA -> {
+                // x / (x^a) = x^(1-a)
+                return PowerValue(tempA, MinusValue(ONE, tempB.exponent).simplify()).simplify()
+            }
+
+            tempA is PowerValue && tempA.base == tempB -> {
+                return PowerValue(tempB, MinusValue(tempA.exponent, ONE).simplify()).simplify()
+            }
+            // cross out factors on both sides of the division
+            tempA is MultiplyValue && tempB is MultiplyValue -> {
+                if (tempA.a == tempB.a) return DivideValue(tempA.b, tempB.b).simplify()
+                if (tempA.a == tempB.b) return DivideValue(tempA.b, tempB.a).simplify()
+                if (tempA.b == tempB.a) return DivideValue(tempA.a, tempB.b).simplify()
+                if (tempA.b == tempB.b) return DivideValue(tempA.a, tempB.a).simplify()
+            }
         }
-        return DivideValue(tempA, tempB)
+
+        // Move constant denominators to numerator
+        return when (tempB) {
+            is ConstantValue if tempB.num != 1.0 && tempB.num != -1.0 ->
+                MultiplyValue(DivideValue(ONE, tempB), tempA).simplify()
+
+            else -> DivideValue(tempA, tempB)
+        }
     }
 
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
-    override fun differentiate(): Value {
+    override fun differentiate(d: Char): Value {
         return DivideValue(
-            MinusValue(MultiplyValue(a.differentiate(), b), MultiplyValue(a, b.differentiate())),
+            MinusValue(MultiplyValue(a.differentiate(d), b), MultiplyValue(a, b.differentiate(d))),
             b.pow(2)
         )
+            .simplify()
     }
 
     override fun toString() = "$a / $b"
@@ -251,31 +326,63 @@ class DivideValue(val a: Value, val b: Value) : Value() {
 
 class PowerValue(val base: Value, val exponent: Value) : Value() {
     override fun isConstant(): Boolean = base.isConstant() && exponent.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return when {
+            exponent.isConstant() -> // Power rule: d/dx f(x)^n = n * f(x)^(n-1) * f'(x)
+                MultiplyValue(
+                    MultiplyValue(exponent, PowerValue(base, exponent.minus(1))),
+                    base.differentiate(d)
+                ).simplify()
+
+            base.isConstant() -> // Exponential: d/dx a^f(x) = a^f(x) * ln(a) * f'(x)
+                MultiplyValue(
+                    MultiplyValue(this, LnValue(base)),
+                    exponent.differentiate(d)
+                ).simplify()
+
+            else -> // Both vary: use logarithmic differentiation
+                MultiplyValue(
+                    this,
+                    PlusValue(
+                        MultiplyValue(exponent.differentiate(d), LnValue(base)),
+                        MultiplyValue(
+                            exponent,
+                            DivideValue(base.differentiate(d), base)
+                        )
+                    )
+                ).simplify()
+        }
     }
+
 
     override fun compute(vars: Map<Char, Value>) = base.compute(vars).pow(exponent.compute(vars))
     override fun toString() = "$base^$exponent"
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
-        }
         val tempA = base.simplify()
         val tempB = exponent.simplify()
 
         return when {
             tempA.isConstant() && tempB.isConstant() -> compute(0).toValue()
-            tempB == ZERO -> ONE
-            else -> PowerValue(base.simplify(), exponent.simplify())
+            tempB == ZERO && tempA != ZERO -> ONE // x^0 = 1 (x ≠ 0)
+            tempB == ONE -> tempA // x^1 = x
+            tempA == ONE -> ONE // 1^x = 1
+            tempA == ZERO && tempB is ConstantValue && tempB.num > 0 -> ZERO // 0^x = 0 (x > 0)
+            tempA is PowerValue ->  // (x^a)^b = x^(a*b)
+                PowerValue(tempA.base, MultiplyValue(tempA.exponent, tempB).simplify()).simplify()
+
+            tempA == E && tempB is LnValue -> tempB.value.simplify() // e^ln(x) = x
+            else -> PowerValue(tempA, tempB)
         }
     }
 }
 
 class LogValue(val value: Value, val base: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant() && base.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return DivideValue(
+            value.differentiate(d),
+            MultiplyValue(value, LnValue(base))
+        ).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = log(value.compute(vars), base.compute(vars))
@@ -297,22 +404,44 @@ class LnValue(val value: Value) : Value() {
     override fun compute(vars: Map<Char, Value>) = ln(value.compute(vars))
     override fun toString() = "ln($value)"
 
-    override fun differentiate(): Value {
-        return DivideValue(value.differentiate(), value)
+    override fun differentiate(d: Char): Value {
+        return DivideValue(value.differentiate(d), value).simplify()
     }
 
     override fun simplify(): Value {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return LnValue(value.simplify())
+        when (val simpleValue = value.simplify()) {
+            ONE -> return ZERO // ln(1) = 0
+            E -> return ONE // ln(e) = 1
+            is ExpValue -> return simpleValue.value.simplify() // ln(e^x) = x
+            is PowerValue -> return MultiplyValue( // ln(x^a) = a * ln(x)
+                simpleValue.exponent,
+                LnValue(simpleValue.base)
+            ).simplify()
+
+            is MultiplyValue -> return PlusValue( // ln(a * b) = ln(a) + ln(b)
+                LnValue(simpleValue.a),
+                LnValue(simpleValue.b)
+            ).simplify()
+
+            is DivideValue -> return MinusValue( // ln(a / b) = ln(a) - ln(b)
+                LnValue(simpleValue.a),
+                LnValue(simpleValue.b)
+            ).simplify()
+
+            else -> return LnValue(simpleValue)
+        }
     }
 }
 
 class LdValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value = toLn().differentiate(d).simplify()
+
+    private fun toLn(): Value {
+        return DivideValue(LnValue(value), LN_TWO).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = log2(value.compute(vars))
@@ -328,25 +457,41 @@ class LdValue(val value: Value) : Value() {
 
 class ExpValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
-    }
+    override fun differentiate(d: Char): Value = MultiplyValue(this, value.differentiate(d)).simplify()
 
     override fun compute(vars: Map<Char, Value>) = exp(value.compute(vars))
     override fun toString() = "exp($value)"
 
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
+        val simplified = value.simplify()
+
+        return when {
+            isConstant() -> compute(0).toValue()
+            simplified == ONE -> E
+            simplified == ZERO -> ONE
+            simplified is LnValue -> simplified.value  // e^ln(x) = x
+            simplified is MultiplyValue -> { // e^(a * ln(b)) = b^a
+                if (simplified.b is LnValue) {
+                    PowerValue(simplified.b.value, simplified.a).simplify()
+                } else if (simplified.a is LnValue) {
+                    PowerValue(simplified.a.value, simplified.b).simplify()
+                } else {
+                    ExpValue(simplified)
+                }
+            }
+
+            else -> ExpValue(simplified)
         }
-        return ExpValue(value.simplify())
     }
 }
 
 class SqrtValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return DivideValue(
+            value.differentiate(d),
+            MultiplyValue(TWO, this)
+        ).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = sqrt(value.compute(vars))
@@ -355,30 +500,46 @@ class SqrtValue(val value: Value) : Value() {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return SqrtValue(value.simplify())
+        return when (val simplified = value.simplify()) {
+            ZERO -> ZERO
+            ONE -> ONE
+            is PowerValue if simplified.exponent == TWO -> simplified.base
+            is ConstantValue -> SqrtValue(simplified).compute(0).toValue()
+            else -> SqrtValue(simplified)
+        }
     }
 }
 
 class CbrtValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun differentiate(): Value {
+    override fun differentiate(d: Char): Value {
         TODO("Not yet implemented")
     }
 
     override fun compute(vars: Map<Char, Value>) = cbrt(value.compute(vars))
     override fun toString() = "cbrt($value)"
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
+        return when (val simplified = value.simplify()) {
+            ZERO -> ZERO // cbrt(0) = 0
+            ONE -> ONE // cbrt(1) = 1
+            NEG_ONE -> NEG_ONE // cbrt(-1) = -1
+            is PowerValue if simplified.exponent == THREE -> simplified.base
+            is ConstantValue -> CbrtValue(simplified).compute(0).toValue()
+            else -> CbrtValue(simplified)
         }
-        return CbrtValue(value.simplify())
     }
 }
 
 class NthRootValue(val value: Value, val n: Int) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return DivideValue(
+            value.differentiate(d),
+            MultiplyValue(
+                MultiplyValue(n.toValue(), this),
+                PowerValue(this, (n - 1).toValue())
+            )
+        ).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = MathUtil.nthRoot(value.compute(vars), n)
@@ -387,14 +548,17 @@ class NthRootValue(val value: Value, val n: Int) : Value() {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return NthRootValue(value.simplify(), n)
+        return when (value) {
+            is PowerValue if value.exponent.simplify() == n.toValue() -> value
+            else -> NthRootValue(value.simplify(), n)
+        }
     }
 }
 
 class SinValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return MultiplyValue(CosValue(inner), inner.differentiate(d)).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = sin(inner.compute(vars))
@@ -403,15 +567,25 @@ class SinValue(val inner: Value) : Value() {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return SinValue(inner.simplify())
+        return when (val simplified = inner.simplify()) {
+            ZERO -> ZERO // sin(0) = 0
+            PI -> ZERO // sin(π) = 0
+            DivideValue(PI, TWO) -> ONE // sin(π/2) = 1
+            is MultiplyValue if simplified.a == NEG_ONE -> { // sin(-x) = -sin(x)
+                MultiplyValue(NEG_ONE, SinValue(simplified.b)).simplify()
+            }
+
+            else -> SinValue(simplified)
+        }
     }
 }
 
 class AsinValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
-    }
+    override fun differentiate(d: Char): Value = DivideValue(
+        inner.differentiate(d),
+        SqrtValue(ONE.minus(inner.pow(2)))
+    ).simplify()
 
     override fun compute(vars: Map<Char, Value>) = asin(inner.compute(vars))
     override fun toString() = "asin($inner)"
@@ -425,8 +599,8 @@ class AsinValue(val inner: Value) : Value() {
 
 class CosValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return MultiplyValue(SinValue(inner).multiply(-1), inner.differentiate(d)).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = cos(inner.compute(vars))
@@ -435,14 +609,27 @@ class CosValue(val inner: Value) : Value() {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return CosValue(inner.simplify())
+
+        return when (val simplified = inner.simplify()) {
+            ZERO -> ONE // cos(0) = 1
+            PI -> NEG_ONE // cos(π) = -1
+            DivideValue(PI, TWO) -> ZERO // cos(π/2) = 0
+            is MultiplyValue if simplified.a == NEG_ONE -> CosValue(simplified.b) // cos(-x) = cos(x)
+            else -> CosValue(simplified)
+        }
     }
 }
 
 class AcosValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return MultiplyValue(
+            DivideValue(
+                ONE.multiply(-1),
+                SqrtValue(ONE.minus(inner.pow(2)))
+            ),
+            inner.differentiate(d)
+        ).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = acos(inner.compute(vars))
@@ -457,8 +644,11 @@ class AcosValue(val inner: Value) : Value() {
 
 class TanValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return DivideValue(
+            inner.differentiate(d).simplify(),
+            CosValue(inner.simplify()).pow(2)
+        ).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = tan(inner.compute(vars))
@@ -473,8 +663,11 @@ class TanValue(val inner: Value) : Value() {
 
 class AtanValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun differentiate(): Value {
-        TODO("Not yet implemented")
+    override fun differentiate(d: Char): Value {
+        return MultiplyValue(
+            ONE.divide(ONE.plus(inner.pow(2))),
+            inner.differentiate(d)
+        ).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = atan(inner.compute(vars))
