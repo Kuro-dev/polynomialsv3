@@ -3,24 +3,45 @@
 package org.kurodev.value
 
 import org.kurodev.MathUtil
+import java.util.*
 import kotlin.math.*
 
-private val ZERO: Value = 0.toValue()
-private val ONE: Value = 1.toValue()
-private val TWO: Value = 2.toValue()
-private val THREE: Value = 3.toValue()
+private val ZERO: Value by lazy { ConstantValue(0) }
+private val ONE: Value by lazy { ConstantValue(1) }
+private val TWO: Value by lazy { ConstantValue(2) }
+private val THREE: Value by lazy { ConstantValue(3) }
 
-private val NEG_ONE: Value = (-1).toValue()
-private val E: Value = Math.E.toValue()
-private val PI: Value = Math.PI.toValue()
-private val LN_TWO: Value = LnValue(2.toValue()).simplify()
+private val NEG_ONE: Value = ConstantValue(-1)
+private val E: Value by lazy {
+    object : ConstantValue(Math.E) {
+        override fun toString() = "E"
+    }
+}
+
+private val PI: Value by lazy {
+    object : ConstantValue(Math.PI) {
+        override fun toString() = "π"
+    }
+}
+private val LN_TWO: Value by lazy { LnValue(2.toValue()).simplify() }
 
 fun Double.toValue(): Value {
-    return ConstantValue(this)
+    return when {
+        this == Math.E -> E
+        this == Math.PI -> PI
+        else -> ConstantValue(this)
+    }
 }
 
 fun Int.toValue(): Value {
-    return ConstantValue(this)
+    return when (this) {
+        0 -> ZERO
+        1 -> ONE
+        2 -> TWO
+        3 -> THREE
+        -1 -> NEG_ONE
+        else -> ConstantValue(this)
+    }
 }
 
 fun Char.toValue(): Value {
@@ -63,7 +84,7 @@ class VariableValue(val variable: Char) : Value() {
 
 }
 
-class ConstantValue(val num: Double) : Value() {
+open class ConstantValue(val num: Double) : Value() {
     constructor(num: Int) : this(num.toDouble())
 
     override fun compute(vars: Map<Char, Value>) = num
@@ -77,7 +98,7 @@ abstract class Value() {
 
     override fun toString(): String = "undefined";
     abstract fun compute(vars: Map<Char, Value>): Double;
-
+    fun compute(): Double = compute(Collections.emptyMap())
     fun compute(x: Int): Double = compute(x.toValue())
     fun compute(x: Double): Double = compute(x.toValue())
     fun compute(x: Value): Double {
@@ -85,6 +106,9 @@ abstract class Value() {
         vars['x'] = x;
         return compute(vars)
     }
+
+    fun toRadians(): Value = RadianValue(this)
+    fun toDegrees(): Value = DegreeValue(this)
 
     abstract fun isConstant(): Boolean;
 
@@ -167,6 +191,31 @@ abstract class Value() {
     override fun hashCode(): Int {
         return javaClass.hashCode()
     }
+}
+
+class RadianValue(val value: Value) : Value() {
+    override fun compute(vars: Map<Char, Value>): Double {
+        return Math.toRadians(value.compute(vars))
+    }
+
+    override fun isConstant(): Boolean = value.isConstant()
+    override fun differentiate(d: Char): Value = value.differentiate(d).toRadians()
+    override fun toString(): String {
+        return "$value"
+    }
+}
+
+class DegreeValue(val value: Value) : Value() {
+    override fun compute(vars: Map<Char, Value>): Double {
+        return Math.toDegrees(value.compute(vars))
+    }
+
+    override fun toString(): String {
+        return "$value"
+    }
+
+    override fun isConstant(): Boolean = value.isConstant()
+    override fun differentiate(d: Char): Value = value.differentiate(d).toRadians()
 }
 
 class PlusValue(val a: Value, val b: Value) : Value() {
