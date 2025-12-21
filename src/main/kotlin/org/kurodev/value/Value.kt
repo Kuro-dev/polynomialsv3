@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package org.kurodev.value
 
 import org.kurodev.MathUtil
@@ -513,7 +515,14 @@ class SqrtValue(val value: Value) : Value() {
 class CbrtValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
     override fun differentiate(d: Char): Value {
-        TODO("Not yet implemented")
+        // d/dx [cbrt(u)] = u' / (3 * (cbrt(u))²)
+        return DivideValue(
+            value.differentiate(d),
+            MultiplyValue(
+                THREE,
+                PowerValue(this, TWO)
+            )
+        ).simplify()
     }
 
     override fun compute(vars: Map<Char, Value>) = cbrt(value.compute(vars))
