@@ -3,6 +3,9 @@ package org.kurodev.value
 import org.kurodev.MathUtil
 import kotlin.math.*
 
+private val ZERO: Value = 0.toValue()
+private val ONE: Value = 1.toValue()
+
 fun Double.toValue(): Value {
     return ConstantValue(this)
 }
@@ -11,38 +14,66 @@ fun Int.toValue(): Value {
     return ConstantValue(this)
 }
 
+fun Char.toValue(): Value {
+    return VariableValue(this)
+}
+
+class VariableValue(val variable: Char) : Value() {
+    override fun compute(vars: Map<Char, Value>): Double {
+        val value = vars[variable]
+        if (value != null) {
+            return value.compute(vars);
+        }
+        throw IllegalArgumentException("'$variable' was not defined")
+    }
+
+    override fun isConstant(): Boolean = false
+
+    override fun differentiate(): Value = ONE
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        if (!super.equals(other)) return false
+
+        other as VariableValue
+
+        return variable == other.variable
+    }
+
+    override fun hashCode(): Int {
+        var result = super.hashCode()
+        result = 31 * result + variable.hashCode()
+        return result
+    }
+
+}
+
 class ConstantValue(val num: Double) : Value() {
     constructor(num: Int) : this(num.toDouble())
 
-    override fun compute(x: Double) = num
+    override fun compute(vars: Map<Char, Value>) = num
     override fun toString(): String = if (num % 1.0 == 0.0) num.toInt().toString() else num.toString()
     override fun isConstant(): Boolean = true
+    override fun differentiate(): Value = ZERO;
 }
 
-val NO_VALUE = ConstantValue(Double.NaN)
 
-/**
- * @param factor The factor to multiply X by.
- */
-open class Value(val factor: Double) {
-    constructor(factor: Int) : this(factor.toDouble());
-    constructor() : this(1);
+abstract class Value() {
 
-    open fun compute(x: Double): Double = x
-    override fun toString(): String {
-        if (factor == 1.0)
-            return "x"
-        if (factor % 1.0 == 0.0) {
-            return factor.toInt().toString().plus("x");
-        }
-        return factor.toString().plus("x");
+    override fun toString(): String = "undefined";
+    abstract fun compute(vars: Map<Char, Value>): Double;
+
+    fun compute(x: Int): Double = compute(x.toValue())
+    fun compute(x: Double): Double = compute(x.toValue())
+    fun compute(x: Value): Double {
+        val vars = HashMap<Char, Value>()
+        vars['x'] = x;
+        return compute(vars)
     }
 
-    fun compute(x: Int) = compute(x.toDouble())
+    abstract fun isConstant(): Boolean;
 
-    open fun isConstant(): Boolean = false
-
-    open fun differentiate() = factor.toValue()
+    abstract fun differentiate(): Value;
 
     /**
      * Simplifies all constant values by precomputing them
@@ -53,6 +84,7 @@ open class Value(val factor: Double) {
         }
         return this
     }
+
 
     fun plus(other: Value): Value = PlusValue(this, other)
     fun plus(other: Double) = plus(other.toValue())
@@ -93,10 +125,23 @@ open class Value(val factor: Double) {
     fun atan(): Value = AtanValue(this)
 
     fun nthRoot(base: Int): Value = NthRootValue(this, base)
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is Value) return false
+        if (this.isConstant() && other.isConstant()) {
+            return this.compute(0) == other.compute(0)
+        }
+        return true
+    }
+
+    override fun hashCode(): Int {
+        return javaClass.hashCode()
+    }
 }
 
 class PlusValue(val a: Value, val b: Value) : Value() {
-    override fun compute(x: Double) = a.compute(x) + b.compute(x)
+    override fun compute(vars: Map<Char, Value>) = a.compute(vars) + b.compute(vars)
     override fun toString() = "$a + $b"
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
 
@@ -104,7 +149,14 @@ class PlusValue(val a: Value, val b: Value) : Value() {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return PlusValue(a.simplify(), b.simplify())
+        val tempA = a.simplify()
+        val tempB = b.simplify()
+        if (tempA.isConstant() && tempB.isConstant()) {
+            return compute(0).toValue()
+        }
+        if (tempA == ZERO) return tempB
+        if (tempB == ZERO) return tempA
+        return PlusValue(tempA, tempB)
     }
 
     override fun differentiate(): Value {
@@ -113,14 +165,22 @@ class PlusValue(val a: Value, val b: Value) : Value() {
 }
 
 class MinusValue(val a: Value, val b: Value) : Value() {
-    override fun compute(x: Double) = a.compute(x) - b.compute(x)
+    override fun compute(vars: Map<Char, Value>) = a.compute(vars) - b.compute(vars)
     override fun toString() = "$a - $b"
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
     override fun simplify(): Value {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return MinusValue(a.simplify(), b.simplify())
+        val tempA = a.simplify()
+        val tempB = b.simplify()
+        if (tempA.isConstant() && tempB.isConstant()) {
+            return compute(0).toValue()
+        }
+        if (tempA == tempB) {
+            return ZERO
+        }
+        return MinusValue(tempA, tempB)
     }
 
     override fun differentiate(): Value {
@@ -129,14 +189,24 @@ class MinusValue(val a: Value, val b: Value) : Value() {
 }
 
 class MultiplyValue(val a: Value, val b: Value) : Value() {
-    override fun compute(x: Double) = a.compute(x) * b.compute(x)
+    override fun compute(vars: Map<Char, Value>) = a.compute(vars) * b.compute(vars)
     override fun toString() = "$a * $b"
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
     override fun simplify(): Value {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return MultiplyValue(a.simplify(), b.simplify())
+        val tempA = a.simplify()
+        val tempB = b.simplify()
+
+        if (tempA.isConstant() && tempB.isConstant()) {
+            return compute(0).toValue()
+        }
+
+        if (tempA == ZERO && tempB == ZERO) {
+            return ZERO
+        }
+        return MultiplyValue(tempA, tempB)
     }
 
     override fun differentiate(): Value {
@@ -145,17 +215,27 @@ class MultiplyValue(val a: Value, val b: Value) : Value() {
 }
 
 class DivideValue(val a: Value, val b: Value) : Value() {
-    override fun compute(x: Double): Double {
-        val div = b.compute(x)
+    override fun compute(vars: Map<Char, Value>): Double {
+        val div = b.compute(vars)
         if (div == 0.0) throw IllegalStateException("Division by zero")
-        return a.compute(x) / div
+        return a.compute(vars) / div
     }
 
     override fun simplify(): Value {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return DivideValue(a.simplify(), b.simplify())
+        val tempA = a.simplify()
+        val tempB = b.simplify()
+
+        if (tempA.isConstant() && tempB.isConstant()) {
+            return compute(0).toValue()
+        }
+
+        if (tempA == tempB) {
+            return ONE
+        }
+        return DivideValue(tempA, tempB)
     }
 
     override fun isConstant(): Boolean = a.isConstant() && b.isConstant()
@@ -171,32 +251,52 @@ class DivideValue(val a: Value, val b: Value) : Value() {
 
 class PowerValue(val base: Value, val exponent: Value) : Value() {
     override fun isConstant(): Boolean = base.isConstant() && exponent.isConstant()
-    override fun compute(x: Double) = base.compute(x).pow(exponent.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = base.compute(vars).pow(exponent.compute(vars))
     override fun toString() = "$base^$exponent"
     override fun simplify(): Value {
         if (isConstant()) {
             return compute(0).toValue()
         }
-        return PowerValue(base.simplify(), exponent.simplify())
+        val tempA = base.simplify()
+        val tempB = exponent.simplify()
+
+        return when {
+            tempA.isConstant() && tempB.isConstant() -> compute(0).toValue()
+            tempB == ZERO -> ONE
+            else -> PowerValue(base.simplify(), exponent.simplify())
+        }
     }
 }
 
 class LogValue(val value: Value, val base: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant() && base.isConstant()
-    override fun compute(x: Double) = log(value.compute(x), base.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = log(value.compute(vars), base.compute(vars))
     override fun toString() = "log$base($value)"
     override fun simplify(): Value {
-        if (isConstant()) {
-            return compute(0).toValue()
+        if (isConstant()) return compute(0).toValue()
+        val tempA = value.simplify()
+        val tempB = base.simplify()
+        return when {
+            tempA.isConstant() && tempB.isConstant() -> compute(0).toValue()
+            tempA == tempB -> ONE
+            else -> LogValue(tempA, tempB)
         }
-        return PlusValue(value.simplify(), base.simplify())
     }
 }
 
 class LnValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun compute(x: Double) = ln(value.compute(x))
+    override fun compute(vars: Map<Char, Value>) = ln(value.compute(vars))
     override fun toString() = "ln($value)"
+
     override fun differentiate(): Value {
         return DivideValue(value.differentiate(), value)
     }
@@ -211,8 +311,13 @@ class LnValue(val value: Value) : Value() {
 
 class LdValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun compute(x: Double) = log2(value.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = log2(value.compute(vars))
     override fun toString() = "ld($value)"
+
     override fun simplify(): Value {
         if (isConstant()) {
             return compute(0).toValue()
@@ -223,8 +328,13 @@ class LdValue(val value: Value) : Value() {
 
 class ExpValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun compute(x: Double) = exp(value.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = exp(value.compute(vars))
     override fun toString() = "exp($value)"
+
     override fun simplify(): Value {
         if (isConstant()) {
             return compute(0).toValue()
@@ -235,7 +345,11 @@ class ExpValue(val value: Value) : Value() {
 
 class SqrtValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun compute(x: Double) = sqrt(value.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = sqrt(value.compute(vars))
     override fun toString() = "sqrt($value)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -247,7 +361,11 @@ class SqrtValue(val value: Value) : Value() {
 
 class CbrtValue(val value: Value) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun compute(x: Double) = cbrt(value.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = cbrt(value.compute(vars))
     override fun toString() = "cbrt($value)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -259,7 +377,11 @@ class CbrtValue(val value: Value) : Value() {
 
 class NthRootValue(val value: Value, val n: Int) : Value() {
     override fun isConstant(): Boolean = value.isConstant()
-    override fun compute(x: Double) = MathUtil.nthRoot(value.compute(x), n)
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = MathUtil.nthRoot(value.compute(vars), n)
     override fun toString() = "root$n($value)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -271,7 +393,11 @@ class NthRootValue(val value: Value, val n: Int) : Value() {
 
 class SinValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun compute(x: Double) = sin(inner.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = sin(inner.compute(vars))
     override fun toString() = "sin($inner)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -283,7 +409,11 @@ class SinValue(val inner: Value) : Value() {
 
 class AsinValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun compute(x: Double) = asin(inner.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = asin(inner.compute(vars))
     override fun toString() = "asin($inner)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -295,7 +425,11 @@ class AsinValue(val inner: Value) : Value() {
 
 class CosValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun compute(x: Double) = cos(inner.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = cos(inner.compute(vars))
     override fun toString() = "cos($inner)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -307,7 +441,11 @@ class CosValue(val inner: Value) : Value() {
 
 class AcosValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun compute(x: Double) = acos(inner.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = acos(inner.compute(vars))
     override fun toString() = "acos($inner)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -319,7 +457,11 @@ class AcosValue(val inner: Value) : Value() {
 
 class TanValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun compute(x: Double) = tan(inner.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = tan(inner.compute(vars))
     override fun toString() = "tan($inner)"
     override fun simplify(): Value {
         if (isConstant()) {
@@ -331,7 +473,11 @@ class TanValue(val inner: Value) : Value() {
 
 class AtanValue(val inner: Value) : Value() {
     override fun isConstant(): Boolean = inner.isConstant()
-    override fun compute(x: Double) = atan(inner.compute(x))
+    override fun differentiate(): Value {
+        TODO("Not yet implemented")
+    }
+
+    override fun compute(vars: Map<Char, Value>) = atan(inner.compute(vars))
     override fun toString() = "atan($inner)"
     override fun simplify(): Value {
         if (isConstant()) {
